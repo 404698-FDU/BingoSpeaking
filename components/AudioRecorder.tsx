@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 
 interface AudioRecorderProps {
@@ -22,7 +23,6 @@ const AudioRecorder = forwardRef<AudioRecorderHandle, AudioRecorderProps>(({
   
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  // Use 'any' for timerRef to avoid NodeJS namespace issues in browser environment where types might be missing
   const timerRef = useRef<any>(null);
   const animationFrameRef = useRef<number | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -100,7 +100,9 @@ const AudioRecorder = forwardRef<AudioRecorderHandle, AudioRecorderProps>(({
     if (timerRef.current) clearInterval(timerRef.current);
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
     if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
-    if (audioContextRef.current) audioContextRef.current.close();
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+       audioContextRef.current.close();
+    }
     setVolume(0);
   };
 

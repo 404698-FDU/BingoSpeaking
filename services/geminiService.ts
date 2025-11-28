@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type, Modality } from "@google/genai";
 import { TestPaper, EvaluationResult, TestSectionType } from "../types";
 import { blobToBase64, decodeAudioData } from "./audioUtils";
@@ -13,74 +14,117 @@ export const generateTestPaper = async (): Promise<TestPaper> => {
     type: Type.OBJECT,
     properties: {
       id: { type: Type.STRING },
-      readingSection: {
+      speakingA: {
         type: Type.OBJECT,
         properties: {
-          text: { type: Type.STRING, description: "A paragraph of about 100-120 words." },
-          prepTime: { type: Type.NUMBER },
-          recordTime: { type: Type.NUMBER },
+          items: { type: Type.ARRAY, items: { type: Type.STRING }, description: "2 distinct sentences for reading aloud (Shanghai GaoKao level). The first sentence is shorter and the second is longer." }
         },
-        required: ["text", "prepTime", "recordTime"]
+        required: ["items"]
       },
-      repeatSection: {
+      speakingB: {
         type: Type.OBJECT,
         properties: {
-          sentences: { 
-            type: Type.ARRAY, 
-            items: { type: Type.STRING },
-            description: "5 sentences of increasing difficulty." 
-          },
-          recordTime: { type: Type.NUMBER },
+          text: { type: Type.STRING, description: "A reading passage of about 120 words. Academic or narrative style." }
         },
-        required: ["sentences", "recordTime"]
+        required: ["text"]
       },
-      qaSection: {
+      speakingC: {
         type: Type.OBJECT,
         properties: {
-          dialogue: { type: Type.STRING, description: "A dialogue between two people." },
+          items: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                situation: { type: Type.STRING, description: "A situation description (e.g., 'Your friend is sick...'). Explicitly state that the student needs to ask two questions, and at least one must be a special question (Wh-question)." }
+              },
+              required: ["situation"]
+            },
+            description: "Exactly 2 distinct situations."
+          }
+        },
+        required: ["items"]
+      },
+      speakingD: {
+        type: Type.OBJECT,
+        properties: {
+          imageDescription: { type: Type.STRING, description: "Visual description of a 4-panel comic strip story involving students or daily life. Describe panel 1, 2, 3, and 4 separately to guide image generation." },
+          givenSentence: { type: Type.STRING, description: "The mandatory starting sentence for the story." }
+        },
+        required: ["imageDescription", "givenSentence"]
+      },
+      listeningA: {
+        type: Type.OBJECT,
+        properties: {
+          questions: { type: Type.ARRAY, items: { type: Type.STRING }, description: "4 short conversational sentences/questions for fast response." }
+        },
+        required: ["questions"]
+      },
+      listeningB: {
+        type: Type.OBJECT,
+        properties: {
+          passage: { type: Type.STRING, description: "A narrative or expository passage (~150 words) for listening comprehension." },
           questions: {
             type: Type.ARRAY,
             items: {
               type: Type.OBJECT,
               properties: {
                 question: { type: Type.STRING },
-                answerHint: { type: Type.STRING }
-              }
+                type: { type: Type.STRING, enum: ["fact", "opinion"] },
+                prepTime: { type: Type.NUMBER },
+                recordTime: { type: Type.NUMBER }
+              },
+              required: ["question", "type", "prepTime", "recordTime"]
             },
-            description: "3 questions based on the dialogue."
-          },
-          recordTime: { type: Type.NUMBER },
+            description: "Exactly 2 questions. Q1 is factual (30s prep/30s answer). Q2 is opinion/comment (60s prep/60s answer)."
+          }
         },
-        required: ["dialogue", "questions", "recordTime"]
-      },
-      speechSection: {
-        type: Type.OBJECT,
-        properties: {
-          topic: { type: Type.STRING },
-          prompt: { type: Type.STRING, description: "Description or prompt for the speech." },
-          prepTime: { type: Type.NUMBER },
-          recordTime: { type: Type.NUMBER },
-        },
-        required: ["topic", "prompt", "prepTime", "recordTime"]
+        required: ["passage", "questions"]
       }
     },
-    required: ["readingSection", "repeatSection", "qaSection", "speechSection"]
+    required: ["speakingA", "speakingB", "speakingC", "speakingD", "listeningA", "listeningB"]
   };
 
   const response = await ai.models.generateContent({
     model,
-    contents: "Generate a Shanghai College Entrance Examination English Listening and Speaking Test simulation paper.",
+    contents: "Generate a simulation paper for the Shanghai College Entrance Examination English Listening and Speaking Test. \n\nStructure:\nPart II Speaking:\n- Section A: Reading Sentences (2 items)\n- Section B: Reading Passage (1 item)\n- Section C: Situational Questions (2 situations). Ensure each situation explicitly prompts for 2 questions, one of which implies a 'special' (Wh-) question.\n- Section D: Picture Talk (1 item). Provide a description for a 4-panel comic.\n\nPart III Listening and Speaking:\n- Section A: Fast Response (4 items)\n- Section B: Listening Passage (1 passage, 2 questions)\n\nEnsure difficulty matches the Shanghai GaoKao standards.",
     config: {
       responseMimeType: "application/json",
       responseSchema: schema,
-      systemInstruction: "You are an expert English test creator for the Shanghai GaoKao. Create realistic, challenging, but appropriate content for high school students.",
+      systemInstruction: "You are an expert English test creator for the Shanghai GaoKao. Create realistic, challenging content.",
     }
   });
 
   return JSON.parse(response.text || '{}') as TestPaper;
 };
 
-// --- 2. Text to Speech ---
+// --- 2. Generate Image (Section D) ---
+export const generateImage = async (description: string): Promise<string> => {
+  const model = "gemini-2.5-flash-image";
+  try {
+      const response = await ai.models.generateContent({
+        model,
+        contents: {
+            parts: [{ text: `Create a simple black and white line-drawing style 4-panel comic strip based on this description: ${description}. The image should look like a test booklet illustration. The panels should be arranged in a grid.` }]
+        },
+        config: {
+           // Standard config for generation
+        }
+      });
+      
+      for (const part of response.candidates?.[0]?.content?.parts || []) {
+          if (part.inlineData) {
+              return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
+          }
+      }
+      return "";
+  } catch (e) {
+      console.error("Image generation failed", e);
+      return "";
+  }
+};
+
+// --- 3. Text to Speech ---
 export const playTextAsSpeech = async (text: string, voice: 'Kore' | 'Puck' | 'Fenrir' = 'Kore'): Promise<void> => {
   try {
     const response = await ai.models.generateContent({
@@ -108,7 +152,6 @@ export const playTextAsSpeech = async (text: string, voice: 'Kore' | 'Puck' | 'F
       source.connect(audioContext.destination);
       source.start();
       
-      // Return a promise that resolves when audio finishes
       return new Promise((resolve) => {
         source.onended = () => {
             audioContext.close();
@@ -118,10 +161,12 @@ export const playTextAsSpeech = async (text: string, voice: 'Kore' | 'Puck' | 'F
     }
   } catch (error) {
     console.error("Error generating speech:", error);
+    // Fallback: immediate resolve if TTS fails so test doesn't hang
+    return Promise.resolve();
   }
 };
 
-// --- 3. Evaluate Audio ---
+// --- 4. Evaluate Audio ---
 export const evaluateAudio = async (
   audioBlob: Blob, 
   referenceText: string, 
@@ -129,48 +174,121 @@ export const evaluateAudio = async (
   context?: string
 ): Promise<EvaluationResult> => {
   const base64Audio = await blobToBase64(audioBlob);
-  const model = "gemini-2.5-flash"; // Capable of multimodal understanding
+  const model = "gemini-2.5-flash"; 
+
+  let rubric = "";
+  switch (type) {
+    case TestSectionType.SpeakingA: // Reading Sentences (0.5 pts)
+      rubric = `
+        Max Score: 0.5.
+        - 0.5: Fluent, clear pronunciation, correct stress/intonation, correct pausing.
+        - 0.25: Basic reading, some errors in pronunciation/intonation but understandable.
+        - 0.0: Serious errors, unintelligible, or no answer.
+      `;
+      break;
+    case TestSectionType.SpeakingB: // Reading Passage (1.0 pts)
+      rubric = `
+        Max Score: 1.0.
+        - 1.0: Clear, accurate, natural intonation, logical pausing, fluent.
+        - 0.75: Mostly clear, minor errors, generally fluent.
+        - 0.5: Some unclear pronunciation/intonation, not fluent.
+        - 0.25: Inaccurate, many errors, hard to understand.
+        - 0.0: Unintelligible.
+      `;
+      break;
+    case TestSectionType.SpeakingC: // Situational Questions (0.5 pts per question)
+      rubric = `
+        Max Score: 0.5.
+        - 0.5: Appropriate question, complete structure, correct grammar.
+        - 0.25: Question is relevant but not fully reasonable or has grammatical errors, but meaning is clear.
+        - 0.0: Irrelevant, repetition, unable to ask, or asking two Yes/No questions (2nd gets 0).
+      `;
+      break;
+    case TestSectionType.SpeakingD: // Picture Talk (1.5 pts)
+      rubric = `
+        Max Score: 1.5.
+        - 1.5: Coherent, complete story matching pictures, clear expression, fluent, correct grammar/vocab.
+        - 1.0: Mostly coherent, matches pictures, some grammar/vocab errors but meaning clear.
+        - 0.5: Unclear main idea, incoherent, disconnected from pictures, serious errors.
+        - 0.0: No answer or irrelevant.
+      `;
+      break;
+    case TestSectionType.ListeningA: // Fast Response (0.5 pts)
+      rubric = `
+        Max Score: 0.5.
+        - 0.5: Accurate and reasonable response, correct phonetics/grammar.
+        - 0.25: Reasonably accurate, basic phonetics correct, minor errors.
+        - 0.0: Inaccurate, unreasonable, or no response.
+      `;
+      break;
+    case TestSectionType.ListeningB: // Listening Passage (Q1: 1.0, Q2: 1.5)
+      // We need to guess if it's Q1 or Q2 based on context or max score logic.
+      // Q1 is usually factual (Max 1.0), Q2 is opinion (Max 1.5).
+      rubric = `
+        If Factual Question (Q1): Max Score 1.0.
+        - 1.0: Clear, comprehensive, correct answer.
+        - 0.5: Partial answer, incomplete, minor errors.
+        - 0.0: Incorrect or irrelevant.
+        
+        If Opinion Question (Q2): Max Score 1.5.
+        - 1.5: Coherent, fluent, relevant, correct language.
+        - 1.0: Basic coherence, relevant, able to talk.
+        - 0.5: Incoherent, off-topic, serious errors.
+        - 0.0: No answer.
+      `;
+      break;
+  }
 
   const prompt = `
-    Task: Evaluate the student's oral English performance.
-    Context/Reference Text: "${referenceText}"
-    ${context ? `Additional Context: ${context}` : ''}
+    Task: Evaluate the student's oral English performance for the Shanghai GaoKao.
     Section Type: ${type}
+    Context/Prompt: "${context || 'N/A'}"
+    Reference/Expected Content: "${referenceText}"
 
-    Please analyze the audio recording provided. 
-    1. Transcribe what you heard.
-    2. Score Accuracy (0-10): How closely does it match the reference or answer the question?
-    3. Score Pronunciation (0-10): Native-like accent and clear articulation.
-    4. Score Fluency (0-10): Smoothness, speed, and lack of hesitation.
-    5. Calculate Overall Score (0-10) based on weighted average suitable for GaoKao.
-    6. Provide brief constructive feedback (max 2 sentences).
+    Rubric:
+    ${rubric}
+
+    Instructions:
+    1. Assign a 'score' strictly based on the rubric above (e.g., 0.5, 0.25, 0.0, 1.0, 1.5).
+    2. Also provide breakdown ratings (0-10 scale) for:
+       - Accuracy: Relevance and correctness.
+       - Pronunciation: Intonation, stress, clarity.
+       - Fluency: Flow and speed.
+    3. Transcribe the audio.
+    
+    Provide JSON output.
   `;
 
   const schema = {
     type: Type.OBJECT,
     properties: {
-      score: { type: Type.NUMBER },
-      accuracy: { type: Type.NUMBER },
-      pronunciation: { type: Type.NUMBER },
-      fluency: { type: Type.NUMBER },
+      score: { type: Type.NUMBER, description: "The exam score based on the rubric (e.g. 0.5, 1.0)" },
+      accuracy: { type: Type.NUMBER, description: "0-10 scale" },
+      pronunciation: { type: Type.NUMBER, description: "0-10 scale" },
+      fluency: { type: Type.NUMBER, description: "0-10 scale" },
       feedback: { type: Type.STRING },
       transcription: { type: Type.STRING },
     }
   };
 
-  const response = await ai.models.generateContent({
-    model,
-    contents: {
-      parts: [
-        { inlineData: { mimeType: audioBlob.type || 'audio/webm', data: base64Audio } },
-        { text: prompt }
-      ]
-    },
-    config: {
-      responseMimeType: "application/json",
-      responseSchema: schema
-    }
-  });
+  try {
+    const response = await ai.models.generateContent({
+      model,
+      contents: {
+        parts: [
+          { inlineData: { mimeType: audioBlob.type || 'audio/webm', data: base64Audio } },
+          { text: prompt }
+        ]
+      },
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: schema
+      }
+    });
 
-  return JSON.parse(response.text || '{}') as EvaluationResult;
+    return JSON.parse(response.text || '{}') as EvaluationResult;
+  } catch (e) {
+    console.error("Scoring failed", e);
+    return { score: 0, accuracy: 0, pronunciation: 0, fluency: 0, feedback: "Evaluation failed", transcription: "" };
+  }
 };

@@ -1,6 +1,7 @@
+
 import React from 'react';
 import { SectionScore, TestSectionType } from '../types';
-import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar } from 'recharts';
+import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip } from 'recharts';
 
 interface TestResultProps {
   scores: SectionScore[];
@@ -8,69 +9,91 @@ interface TestResultProps {
 }
 
 const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
-  // Calculate aggregated stats
+  // Simple weighted average for demo purposes
   const totalScore = scores.reduce((acc, section) => {
     const sectionAvg = section.items.reduce((s, item) => s + item.score, 0) / (section.items.length || 1);
     return acc + sectionAvg;
   }, 0) / (scores.length || 1);
 
   const radarData = [
-    { subject: 'Pronunciation', A: scores.reduce((acc, s) => acc + (s.items.reduce((i, x) => i + x.pronunciation, 0) / s.items.length), 0) / scores.length, fullMark: 10 },
-    { subject: 'Fluency', A: scores.reduce((acc, s) => acc + (s.items.reduce((i, x) => i + x.fluency, 0) / s.items.length), 0) / scores.length, fullMark: 10 },
-    { subject: 'Accuracy', A: scores.reduce((acc, s) => acc + (s.items.reduce((i, x) => i + x.accuracy, 0) / s.items.length), 0) / scores.length, fullMark: 10 },
+    { subject: 'Pronunciation', A: calculateMetric(scores, 'pronunciation'), fullMark: 10 },
+    { subject: 'Fluency', A: calculateMetric(scores, 'fluency'), fullMark: 10 },
+    { subject: 'Accuracy', A: calculateMetric(scores, 'accuracy'), fullMark: 10 },
   ];
+
+  function calculateMetric(scores: SectionScore[], metric: 'pronunciation' | 'fluency' | 'accuracy') {
+    let total = 0;
+    let count = 0;
+    scores.forEach(s => {
+      s.items.forEach(i => {
+        total += i[metric];
+        count++;
+      });
+    });
+    return count === 0 ? 0 : total / count;
+  }
 
   const getSectionTitle = (type: TestSectionType) => {
     switch (type) {
-        case TestSectionType.ReadingAloud: return "Reading Aloud";
-        case TestSectionType.RepeatSentence: return "Repeating Sentences";
-        case TestSectionType.QuestionAnswer: return "Q & A";
-        case TestSectionType.FreeSpeech: return "Free Speech";
+        case TestSectionType.SpeakingA: return "Part II Sec A: Reading Sentences";
+        case TestSectionType.SpeakingB: return "Part II Sec B: Reading Passage";
+        case TestSectionType.SpeakingC: return "Part II Sec C: Situational Qs";
+        case TestSectionType.SpeakingD: return "Part II Sec D: Picture Talk";
+        case TestSectionType.ListeningA: return "Part III Sec A: Fast Response";
+        case TestSectionType.ListeningB: return "Part III Sec B: Listening Passage";
+        default: return type;
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto p-6 space-y-8 animate-fade-in">
-      <div className="text-center space-y-2">
-        <h2 className="text-3xl font-bold text-slate-800">Test Complete</h2>
-        <p className="text-slate-500">Here is your comprehensive performance report.</p>
-        <div className="inline-block p-6 rounded-full bg-blue-50 border-4 border-blue-100 mt-4">
-           <span className="text-5xl font-bold text-blue-600">{totalScore.toFixed(1)}</span>
-           <span className="text-xl text-blue-400 font-medium">/10</span>
+    <div className="w-full max-w-5xl mx-auto space-y-8 animate-fade-in pb-10">
+      <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center">
+        <h2 className="text-3xl font-bold text-slate-800 mb-2">Examination Report</h2>
+        <div className="flex items-center justify-center space-x-4 mt-6">
+           <div className="text-center">
+             <div className="text-5xl font-extrabold text-blue-600">{totalScore.toFixed(1)}</div>
+             <div className="text-sm text-slate-500 uppercase tracking-wide font-semibold mt-1">Total Score</div>
+           </div>
         </div>
       </div>
 
       <div className="grid md:grid-cols-2 gap-6">
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200">
-           <h3 className="text-lg font-semibold mb-4">Skill Breakdown</h3>
+        {/* Radar Chart */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 min-h-[300px]">
+           <h3 className="text-lg font-bold text-slate-700 mb-4">Performance Analysis</h3>
            <div className="h-64">
              <ResponsiveContainer width="100%" height="100%">
-               <RadarChart cx="50%" cy="50%" outerRadius="80%" data={radarData}>
+               <RadarChart cx="50%" cy="50%" outerRadius="70%" data={radarData}>
                  <PolarGrid />
                  <PolarAngleAxis dataKey="subject" />
                  <PolarRadiusAxis angle={30} domain={[0, 10]} />
-                 <Radar name="Student" dataKey="A" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.6} />
+                 <Radar name="Student" dataKey="A" stroke="#2563eb" fill="#3b82f6" fillOpacity={0.5} />
                  <Tooltip />
                </RadarChart>
              </ResponsiveContainer>
            </div>
         </div>
 
-        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-200 overflow-y-auto max-h-[400px]">
-           <h3 className="text-lg font-semibold mb-4">Detailed Feedback</h3>
-           <div className="space-y-4">
+        {/* Detailed Breakdown */}
+        <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200 overflow-y-auto max-h-[500px]">
+           <h3 className="text-lg font-bold text-slate-700 mb-4">Section Breakdown</h3>
+           <div className="space-y-6">
              {scores.map((section, idx) => (
                <div key={idx} className="border-b border-slate-100 last:border-0 pb-4">
-                 <h4 className="font-medium text-slate-800">{getSectionTitle(section.sectionType)}</h4>
-                 <div className="mt-2 space-y-3">
+                 <h4 className="font-semibold text-slate-800 bg-slate-50 px-3 py-1 rounded inline-block">{getSectionTitle(section.sectionType)}</h4>
+                 <div className="mt-3 space-y-3">
                    {section.items.map((item, i) => (
-                     <div key={i} className="text-sm bg-slate-50 p-3 rounded-md">
-                       <div className="flex justify-between mb-1">
-                          <span className="font-semibold text-slate-600">Item {i + 1}</span>
-                          <span className="font-bold text-blue-600">{item.score.toFixed(1)}</span>
+                     <div key={i} className="text-sm p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition">
+                       <div className="flex justify-between items-center mb-2">
+                          <span className="font-medium text-slate-600">Item {i + 1}</span>
+                          <span className={`font-bold px-2 py-0.5 rounded ${item.score >= 6 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {item.score.toFixed(1)}
+                          </span>
                        </div>
-                       <p className="text-slate-500 italic mb-2">"{item.transcription}"</p>
-                       <p className="text-slate-700">{item.feedback}</p>
+                       <div className="grid grid-cols-1 gap-1 text-slate-500 text-xs">
+                         <p><span className="font-semibold">Transcript:</span> "{item.transcription}"</p>
+                         <p><span className="font-semibold">Feedback:</span> {item.feedback}</p>
+                       </div>
                      </div>
                    ))}
                  </div>
@@ -80,12 +103,12 @@ const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
         </div>
       </div>
 
-      <div className="flex justify-center pt-8">
+      <div className="flex justify-center pt-4">
         <button 
           onClick={onRestart}
-          className="px-8 py-3 bg-blue-600 text-white font-semibold rounded-lg shadow-lg hover:bg-blue-700 transition transform hover:-translate-y-1"
+          className="px-8 py-4 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-slate-800 transition transform hover:-translate-y-1"
         >
-          Take Another Test
+          Take New Test
         </button>
       </div>
     </div>

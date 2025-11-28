@@ -1,32 +1,38 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   AppStatus, 
   TestPaper, 
   TestSectionType, 
   SectionScore, 
-  EvaluationResult 
+  UserResponse 
 } from './types';
-import { generateTestPaper, playTextAsSpeech, evaluateAudio } from './services/geminiService';
+import { generateTestPaper, generateImage, playTextAsSpeech, evaluateAudio } from './services/geminiService';
 import AudioRecorder, { AudioRecorderHandle } from './components/AudioRecorder';
 import TestResult from './components/TestResult';
 
-// Utility for simple delays
 const delay = (ms: number) => new Promise(res => setTimeout(res, ms));
 
 const App: React.FC = () => {
-  // State
+  // --- State ---
   const [status, setStatus] = useState<AppStatus>(AppStatus.Idle);
   const [testPaper, setTestPaper] = useState<TestPaper | null>(null);
   
-  // Test Progress State
-  const [currentSection, setCurrentSection] = useState<TestSectionType>(TestSectionType.ReadingAloud);
-  const [currentItemIndex, setCurrentItemIndex] = useState(0);
-  const [phase, setPhase] = useState<'instruction' | 'playing' | 'prep' | 'recording' | 'processing'>('instruction');
+  // Flow Control
+  const [currentSection, setCurrentSection] = useState<TestSectionType>(TestSectionType.SpeakingA);
+  const [itemIndex, setItemIndex] = useState(0); 
+  const [subItemIndex, setSubItemIndex] = useState(0); 
+  
+  // UI Display State
+  const [phase, setPhase] = useState<'instruction' | 'playing' | 'prep' | 'recording' | 'processing' | 'rest'>('instruction');
   const [instructionText, setInstructionText] = useState("");
   const [timer, setTimer] = useState(0);
+  const [displayContent, setDisplayContent] = useState<React.ReactNode>(null);
 
-  // Scores
+  // Data
+  const [userResponses, setUserResponses] = useState<UserResponse[]>([]);
   const [scores, setScores] = useState<SectionScore[]>([]);
+  const [scoringProgress, setScoringProgress] = useState<{current: number, total: number}>({current: 0, total: 0});
   
   const recorderRef = useRef<AudioRecorderHandle>(null);
 
@@ -36,368 +42,484 @@ const App: React.FC = () => {
     setStatus(AppStatus.GeneratingTest);
     try {
       const paper = await generateTestPaper();
+      
+      // Generate Image for Speaking D
+      if (paper.speakingD && paper.speakingD.imageDescription) {
+        try {
+          const imageBase64 = await generateImage(paper.speakingD.imageDescription);
+          paper.speakingD.imageUrl = imageBase64;
+        } catch (imgErr) {
+          console.error("Failed to generate image", imgErr);
+        }
+      }
+
       setTestPaper(paper);
       setScores([]);
+      setUserResponses([]);
       setStatus(AppStatus.TestReady);
     } catch (e) {
       console.error(e);
-      alert("Failed to generate test. Please check API Key and try again.");
+      alert("Failed to generate test. Please try again.");
       setStatus(AppStatus.Idle);
     }
   };
 
   const startTest = () => {
     setStatus(AppStatus.InProgress);
-    setCurrentSection(TestSectionType.ReadingAloud);
-    setCurrentItemIndex(0);
-    runSectionFlow(TestSectionType.ReadingAloud, 0);
+    setUserResponses([]);
+    // Start with Speaking A
+    setCurrentSection(TestSectionType.SpeakingA);
+    setItemIndex(0);
+    setSubItemIndex(0);
+    runSpeakingA(0);
   };
 
-  // --- Test Flow Orchestrator ---
+  // --- Timer Helper ---
+  const runTimer = async (seconds: number) => {
+    setTimer(seconds);
+    for (let i = seconds; i > 0; i--) {
+      setTimer(i);
+      await delay(1000);
+    }
+    setTimer(0);
+  };
 
-  const runSectionFlow = async (sectionType: TestSectionType, index: number) => {
+  // --- Section Flows ---
+
+  // 1. Speaking A: Reading Sentences (2 items) - Prep 30s, Read 15s
+  const runSpeakingA = async (index: number) => {
+    if (!testPaper) return;
+    const items = testPaper.speakingA.items;
+    
+    setPhase('instruction');
+    setCurrentSection(TestSectionType.SpeakingA);
+    setInstructionText(`Section A: Read Sentence ${index + 1}`);
+    setDisplayContent(<div className="text-2xl font-serif text-center mt-10 p-6">{items[index]}</div>);
+    await delay(1500);
+
+    setPhase('prep');
+    setInstructionText("Preparation Time (30s)");
+    await runTimer(30);
+
+    setPhase('recording');
+    setInstructionText("Start Reading (15s)");
+  };
+
+  // 2. Speaking B: Reading Passage (1 item) - Prep 60s, Read 30s
+  const runSpeakingB = async () => {
+    if (!testPaper) return;
+    
+    setPhase('instruction');
+    setCurrentSection(TestSectionType.SpeakingB);
+    setInstructionText("Section B: Read the Passage");
+    setDisplayContent(<div className="text-lg leading-relaxed font-serif p-6 bg-white rounded shadow">{testPaper.speakingB.text}</div>);
+    await delay(1500);
+
+    setPhase('prep');
+    setInstructionText("Preparation Time (60s)");
+    await runTimer(60);
+
+    setPhase('recording');
+    setInstructionText("Start Reading (30s)");
+  };
+
+  // 3. Speaking C: Situational Questions (2 situations, 2 Qs each) - Answer 10s each
+  const runSpeakingC = async (idx: number, subIdx: number) => {
+    if (!testPaper) return;
+    const situations = testPaper.speakingC.items;
+    const situation = situations[idx];
+
+    setCurrentSection(TestSectionType.SpeakingC);
+    setInstructionText(`Section C: Situation ${idx + 1} - Q${subIdx + 1}`);
+    setDisplayContent(
+      <div className="text-lg text-center p-6">
+          <h3 className="font-bold mb-4">Situation:</h3>
+          <p>{situation.situation}</p>
+          <p className="mt-4 text-blue-600 font-medium">
+             {subIdx === 0 ? "Ask the first question." : "Ask the second question."}
+          </p>
+          <p className="text-xs text-slate-400 mt-2">(Note: Ensure at least one special question per situation)</p>
+      </div>
+    );
+
+    if (subIdx === 0) {
+      // Give a moment to read the situation before the first question
+      setPhase('instruction');
+      await delay(3000); 
+    } else {
+      setPhase('instruction');
+      await delay(1000);
+    }
+
+    setPhase('recording');
+    setInstructionText("Ask Now (10s)");
+  };
+
+  // 4. Speaking D: Picture Talk - Prep 60s, Talk 60s
+  const runSpeakingD = async () => {
     if (!testPaper) return;
 
     setPhase('instruction');
-    
-    switch (sectionType) {
-      case TestSectionType.ReadingAloud:
-        setInstructionText("Reading Aloud: Read the text aloud after the preparation time.");
-        await delay(2000);
-        
-        setInstructionText("Preparation Time");
-        setPhase('prep');
-        await runTimer(testPaper.readingSection.prepTime);
-        
-        setInstructionText("Start Recording Now!");
-        setPhase('recording');
-        // Recording handled by AudioRecorder triggering onComplete
-        break;
+    setCurrentSection(TestSectionType.SpeakingD);
+    setInstructionText("Section D: Picture Talk");
+    setDisplayContent(
+      <div className="p-4 flex flex-col items-center">
+        {testPaper.speakingD.imageUrl ? (
+          <img src={testPaper.speakingD.imageUrl} alt="Comic Strip" className="w-full max-w-2xl rounded-lg shadow border border-slate-300 mb-4" />
+        ) : (
+          <div className="w-full h-64 bg-slate-200 flex items-center justify-center text-slate-500 mb-4 rounded-lg">
+             {testPaper.speakingD.imageDescription ? "Image Loading Error" : "No Image Description"}
+          </div>
+        )}
+        <div className="bg-blue-50 p-4 rounded border border-blue-200 w-full text-center">
+            <span className="font-bold text-blue-800">Start with: </span>
+            <span className="text-blue-900 italic">{testPaper.speakingD.givenSentence}</span>
+        </div>
+      </div>
+    );
+    await delay(2000);
 
-      case TestSectionType.RepeatSentence:
-        setInstructionText(`Repeat Sentence ${index + 1}/${testPaper.repeatSection.sentences.length}`);
-        setPhase('playing');
-        await playTextAsSpeech(testPaper.repeatSection.sentences[index]);
-        
-        setInstructionText("Repeat now!");
-        setPhase('recording');
-        break;
+    setPhase('prep');
+    setInstructionText("Preparation Time (60s)");
+    await runTimer(60);
 
-      case TestSectionType.QuestionAnswer:
-        if (index === 0) {
-            setInstructionText("Listening to the dialogue...");
-            setPhase('playing');
-            await playTextAsSpeech(testPaper.qaSection.dialogue, 'Puck'); // Use different voice for context
-        }
-        
-        setInstructionText(`Question ${index + 1}`);
-        setPhase('playing');
-        await playTextAsSpeech(testPaper.qaSection.questions[index].question);
-        
-        setInstructionText("Answer now!");
-        setPhase('recording');
-        break;
-
-      case TestSectionType.FreeSpeech:
-        setInstructionText("Free Speech: Read the topic and prepare.");
-        await delay(2000);
-        
-        setInstructionText("Preparation Time");
-        setPhase('prep');
-        await runTimer(testPaper.speechSection.prepTime);
-        
-        setInstructionText("Start Speaking Now!");
-        setPhase('recording');
-        break;
-    }
+    setPhase('recording');
+    setInstructionText("Describe the pictures (60s)");
   };
 
-  const runTimer = (seconds: number) => {
-    return new Promise<void>((resolve) => {
-      setTimer(seconds);
-      const interval = setInterval(() => {
-        setTimer((prev) => {
-          if (prev <= 1) {
-            clearInterval(interval);
-            resolve();
-            return 0;
-          }
-          return prev - 1;
-        });
-      }, 1000);
-    });
+  // 5. Listening A: Fast Response (4 items) - Ans 5s
+  const runListeningA = async (index: number) => {
+    if (!testPaper) return;
+    const questions = testPaper.listeningA.questions;
+
+    setPhase('instruction');
+    setCurrentSection(TestSectionType.ListeningA);
+    setInstructionText(`Fast Response ${index + 1}/${questions.length}`);
+    setDisplayContent(<div className="text-center text-slate-500 mt-10">Listen and respond immediately.</div>);
+    
+    setPhase('playing');
+    await playTextAsSpeech(questions[index]);
+    
+    setPhase('recording');
+    setInstructionText("Answer Now (5s)");
+  };
+
+  // 6. Listening B: Passage Q&A (1 passage, 2 questions)
+  const runListeningB = async (qIndex: number) => {
+    if (!testPaper) return;
+    const section = testPaper.listeningB;
+
+    setCurrentSection(TestSectionType.ListeningB);
+
+    // If start of section, play passage twice
+    if (qIndex === 0) {
+      setPhase('instruction');
+      setInstructionText("Listening Passage");
+      setDisplayContent(<div className="text-center text-slate-500 mt-10">Listen to the passage (Read twice).</div>);
+      
+      setPhase('playing');
+      await playTextAsSpeech(section.passage);
+      await delay(2000);
+      await playTextAsSpeech(section.passage);
+    }
+
+    const q = section.questions[qIndex];
+    setPhase('instruction');
+    setInstructionText(`Question ${qIndex + 1}`);
+    setDisplayContent(<div className="text-xl text-center p-6 font-medium">{q.question}</div>);
+    
+    setPhase('playing');
+    await playTextAsSpeech(q.question);
+
+    setPhase('prep');
+    setInstructionText(`Preparation Time (${q.prepTime}s)`);
+    await runTimer(q.prepTime); 
+
+    setPhase('recording');
+    setInstructionText(`Answer Now (${q.recordTime}s)`);
+  };
+
+  // --- Transitions ---
+
+  const handleSectionRest = async () => {
+    setPhase('rest');
+    setInstructionText("Next Section in 10s...");
+    setDisplayContent(<div className="text-center text-slate-400 mt-10">Take a breath.</div>);
+    await runTimer(10);
   };
 
   const handleRecordingComplete = async (audioBlob: Blob) => {
-    setPhase('processing');
-    setInstructionText("Evaluating response...");
+    if (!testPaper) return;
+
+    // Capture current context
+    const resp: UserResponse = {
+      sectionType: currentSection,
+      audioBlob,
+      referenceText: "",
+      context: "",
+      itemIndex,
+      subIndex: subItemIndex
+    };
+
+    // Determine reference data
+    if (currentSection === TestSectionType.SpeakingA) {
+      resp.referenceText = testPaper.speakingA.items[itemIndex];
+    } else if (currentSection === TestSectionType.SpeakingB) {
+      resp.referenceText = testPaper.speakingB.text;
+    } else if (currentSection === TestSectionType.SpeakingC) {
+      resp.context = testPaper.speakingC.items[itemIndex].situation;
+      resp.referenceText = "Ask a relevant question about the situation. One special (wh-) question required per situation.";
+    } else if (currentSection === TestSectionType.SpeakingD) {
+      resp.context = testPaper.speakingD.imageDescription;
+      resp.referenceText = `Story starting with: ${testPaper.speakingD.givenSentence}`;
+    } else if (currentSection === TestSectionType.ListeningA) {
+      resp.context = `Prompt: ${testPaper.listeningA.questions[itemIndex]}`;
+      resp.referenceText = "Appropriate response to the prompt.";
+    } else if (currentSection === TestSectionType.ListeningB) {
+      const q = testPaper.listeningB.questions[itemIndex];
+      resp.context = `Passage: ${testPaper.listeningB.passage}. Question: ${q.question}`;
+      resp.referenceText = q.type === 'fact' ? "Factual answer from text" : "Opinionated answer";
+    }
+
+    setUserResponses(prev => [...prev, resp]);
+
+    // --- State Machine Logic ---
     
-    if (!testPaper) return;
-
-    let referenceText = "";
-    let context = "";
-
-    // Determine reference text based on current section
-    switch (currentSection) {
-      case TestSectionType.ReadingAloud:
-        referenceText = testPaper.readingSection.text;
-        break;
-      case TestSectionType.RepeatSentence:
-        referenceText = testPaper.repeatSection.sentences[currentItemIndex];
-        break;
-      case TestSectionType.QuestionAnswer:
-        referenceText = testPaper.qaSection.questions[currentItemIndex].answerHint;
-        context = `Question was: ${testPaper.qaSection.questions[currentItemIndex].question}. Context Dialogue: ${testPaper.qaSection.dialogue}`;
-        break;
-      case TestSectionType.FreeSpeech:
-        referenceText = "N/A (Free Speech)";
-        context = `Topic: ${testPaper.speechSection.topic}. Prompt: ${testPaper.speechSection.prompt}`;
-        break;
+    // Speaking A (2 items) -> Rest -> Speaking B
+    if (currentSection === TestSectionType.SpeakingA) {
+      if (itemIndex < testPaper.speakingA.items.length - 1) {
+        setItemIndex(prev => {
+           const next = prev + 1;
+           runSpeakingA(next);
+           return next;
+        });
+      } else {
+        await handleSectionRest();
+        setCurrentSection(TestSectionType.SpeakingB);
+        setItemIndex(0);
+        runSpeakingB();
+      }
     }
-
-    try {
-      const evaluation = await evaluateAudio(audioBlob, referenceText, currentSection, context);
-      
-      // Save Score
-      setScores(prev => {
-        const newScores = [...prev];
-        const sectionIdx = newScores.findIndex(s => s.sectionType === currentSection);
-        if (sectionIdx === -1) {
-          newScores.push({ sectionType: currentSection, items: [evaluation] });
+    // Speaking B (1 item) -> Rest -> Speaking C
+    else if (currentSection === TestSectionType.SpeakingB) {
+      await handleSectionRest();
+      setCurrentSection(TestSectionType.SpeakingC);
+      setItemIndex(0);
+      setSubItemIndex(0);
+      runSpeakingC(0, 0);
+    }
+    // Speaking C (2 items, 2 sub-items each) -> Rest -> Speaking D
+    else if (currentSection === TestSectionType.SpeakingC) {
+      if (subItemIndex === 0) {
+        setSubItemIndex(1);
+        runSpeakingC(itemIndex, 1);
+      } else {
+        if (itemIndex < testPaper.speakingC.items.length - 1) {
+           setItemIndex(prev => {
+             const next = prev + 1;
+             setSubItemIndex(0);
+             runSpeakingC(next, 0);
+             return next;
+           });
         } else {
-          newScores[sectionIdx].items.push(evaluation);
+           await handleSectionRest();
+           setCurrentSection(TestSectionType.SpeakingD);
+           setItemIndex(0);
+           runSpeakingD();
         }
-        return newScores;
-      });
-
-      // Navigate to Next Item or Section
-      moveToNextStep();
-
-    } catch (error) {
-      console.error("Evaluation failed", error);
-      alert("Error evaluating audio. Moving to next.");
-      moveToNextStep();
-    }
-  };
-
-  const moveToNextStep = () => {
-    if (!testPaper) return;
-
-    if (currentSection === TestSectionType.ReadingAloud) {
-      setCurrentSection(TestSectionType.RepeatSentence);
-      setCurrentItemIndex(0);
-      runSectionFlow(TestSectionType.RepeatSentence, 0);
-    } 
-    else if (currentSection === TestSectionType.RepeatSentence) {
-      if (currentItemIndex < testPaper.repeatSection.sentences.length - 1) {
-        setCurrentItemIndex(prev => prev + 1);
-        runSectionFlow(TestSectionType.RepeatSentence, currentItemIndex + 1);
-      } else {
-        setCurrentSection(TestSectionType.QuestionAnswer);
-        setCurrentItemIndex(0);
-        runSectionFlow(TestSectionType.QuestionAnswer, 0);
       }
-    } 
-    else if (currentSection === TestSectionType.QuestionAnswer) {
-      if (currentItemIndex < testPaper.qaSection.questions.length - 1) {
-        setCurrentItemIndex(prev => prev + 1);
-        runSectionFlow(TestSectionType.QuestionAnswer, currentItemIndex + 1);
-      } else {
-        setCurrentSection(TestSectionType.FreeSpeech);
-        setCurrentItemIndex(0);
-        runSectionFlow(TestSectionType.FreeSpeech, 0);
-      }
-    } 
-    else if (currentSection === TestSectionType.FreeSpeech) {
-      setStatus(AppStatus.Review);
+    }
+    // Speaking D (1 item) -> Rest -> Listening A
+    else if (currentSection === TestSectionType.SpeakingD) {
+       await handleSectionRest();
+       setCurrentSection(TestSectionType.ListeningA);
+       setItemIndex(0);
+       runListeningA(0);
+    }
+    // Listening A (4 items) -> Rest -> Listening B
+    else if (currentSection === TestSectionType.ListeningA) {
+       if (itemIndex < testPaper.listeningA.questions.length - 1) {
+         setItemIndex(prev => {
+           const next = prev + 1;
+           runListeningA(next);
+           return next;
+         });
+       } else {
+         await handleSectionRest();
+         setCurrentSection(TestSectionType.ListeningB);
+         setItemIndex(0);
+         runListeningB(0);
+       }
+    }
+    // Listening B (2 items) -> Finish
+    else if (currentSection === TestSectionType.ListeningB) {
+       if (itemIndex < testPaper.listeningB.questions.length - 1) {
+         setItemIndex(prev => {
+           const next = prev + 1;
+           runListeningB(next);
+           return next;
+         });
+       } else {
+         setStatus(AppStatus.Scoring);
+       }
     }
   };
 
-  // --- Render Helpers ---
-
-  const renderContent = () => {
-    if (!testPaper) return null;
-
-    if (currentSection === TestSectionType.ReadingAloud) {
-      return (
-        <div className="bg-white p-6 rounded-lg shadow-md max-w-2xl w-full">
-           <h3 className="text-xl font-bold mb-4 border-b pb-2">Reading Aloud</h3>
-           <p className="text-lg leading-relaxed text-slate-800 font-serif">{testPaper.readingSection.text}</p>
-        </div>
-      );
-    }
-
-    if (currentSection === TestSectionType.RepeatSentence) {
-      return (
-        <div className="bg-white p-6 rounded-lg shadow-md max-w-2xl w-full text-center">
-          <h3 className="text-xl font-bold mb-8">Repeat Sentence</h3>
-          <div className="text-6xl text-blue-200 mb-8">
-            <i className="fas fa-headphones"></i>
-          </div>
-          <p className="text-slate-500">Listen carefully and repeat exactly what you hear.</p>
-          <div className="mt-4 flex justify-center space-x-2">
-             {testPaper.repeatSection.sentences.map((_, idx) => (
-                <div key={idx} className={`w-3 h-3 rounded-full ${idx === currentItemIndex ? 'bg-blue-600' : idx < currentItemIndex ? 'bg-green-400' : 'bg-slate-200'}`}></div>
-             ))}
-          </div>
-        </div>
-      );
-    }
-
-    if (currentSection === TestSectionType.QuestionAnswer) {
-      return (
-        <div className="bg-white p-6 rounded-lg shadow-md max-w-2xl w-full text-center">
-          <h3 className="text-xl font-bold mb-4">Question & Answer</h3>
-          <p className="text-slate-600 mb-6">Listen to the question related to the dialogue and answer briefly.</p>
-          <div className="mt-4 flex justify-center space-x-2">
-             {testPaper.qaSection.questions.map((_, idx) => (
-                <div key={idx} className={`w-3 h-3 rounded-full ${idx === currentItemIndex ? 'bg-blue-600' : idx < currentItemIndex ? 'bg-green-400' : 'bg-slate-200'}`}></div>
-             ))}
-          </div>
-        </div>
-      );
-    }
-
-    if (currentSection === TestSectionType.FreeSpeech) {
-      return (
-         <div className="bg-white p-6 rounded-lg shadow-md max-w-2xl w-full">
-           <h3 className="text-xl font-bold mb-4 border-b pb-2">Free Speech</h3>
-           <div className="bg-blue-50 p-4 rounded border border-blue-100 mb-4">
-             <h4 className="font-semibold text-blue-800 mb-1">Topic: {testPaper.speechSection.topic}</h4>
-             <p className="text-blue-900">{testPaper.speechSection.prompt}</p>
-           </div>
-        </div>
-      );
-    }
-  };
+  // --- Scoring & Duration Logic ---
 
   const getRecordDuration = () => {
     if (!testPaper) return 10;
     switch (currentSection) {
-        case TestSectionType.ReadingAloud: return testPaper.readingSection.recordTime;
-        case TestSectionType.RepeatSentence: return testPaper.repeatSection.recordTime;
-        case TestSectionType.QuestionAnswer: return testPaper.qaSection.recordTime;
-        case TestSectionType.FreeSpeech: return testPaper.speechSection.recordTime;
-        default: return 10;
+      case TestSectionType.SpeakingA: return 15;
+      case TestSectionType.SpeakingB: return 30;
+      case TestSectionType.SpeakingC: return 10;
+      case TestSectionType.SpeakingD: return 60;
+      case TestSectionType.ListeningA: return 5;
+      case TestSectionType.ListeningB: return testPaper.listeningB.questions[itemIndex]?.recordTime || 30;
+      default: return 10;
     }
   };
 
-  // --- Main View ---
+  useEffect(() => {
+    if (status === AppStatus.Scoring) {
+      processExamResults();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [status]);
+
+  const processExamResults = async () => {
+    const newScores: SectionScore[] = [];
+    const getOrAddSection = (type: TestSectionType) => {
+        let section = newScores.find(s => s.sectionType === type);
+        if (!section) {
+            section = { sectionType: type, items: [] };
+            newScores.push(section);
+        }
+        return section;
+    };
+
+    for (let i = 0; i < userResponses.length; i++) {
+        setScoringProgress({ current: i + 1, total: userResponses.length });
+        const resp = userResponses[i];
+        
+        try {
+            const result = await evaluateAudio(resp.audioBlob, resp.referenceText, resp.sectionType, resp.context);
+            const section = getOrAddSection(resp.sectionType);
+            section.items.push(result);
+        } catch (error) {
+            console.error("Evaluation failed", error);
+        }
+    }
+    setScores(newScores);
+    setStatus(AppStatus.Review);
+  };
+
+  // --- Rendering ---
 
   return (
     <div className="min-h-screen bg-slate-50 flex flex-col font-sans">
-      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-50">
+      {/* Header */}
+      <header className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between sticky top-0 z-50 shadow-sm">
         <div className="flex items-center space-x-2">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold">SH</div>
-          <h1 className="text-xl font-bold text-slate-800">English Oral Test Sim</h1>
+          <h1 className="text-xl font-bold text-slate-800">Shanghai Oral English Test</h1>
         </div>
-        {status !== AppStatus.Idle && status !== AppStatus.Review && (
-             <div className="text-sm font-medium px-3 py-1 bg-slate-100 rounded-full text-slate-600">
-               {currentSection.replace(/([A-Z])/g, ' $1').trim()}
-             </div>
+        {status === AppStatus.InProgress && (
+          <div className="text-sm font-medium px-4 py-1 bg-slate-100 rounded-full text-slate-600 border border-slate-200">
+             Part {currentSection.includes('Speaking') ? 'II' : 'III'} - {currentSection.replace(/([A-Z])/g, ' $1')}
+          </div>
         )}
       </header>
 
-      <main className="flex-grow flex flex-col items-center justify-center p-6 relative">
+      <main className="flex-grow flex flex-col items-center justify-center p-6 w-full max-w-5xl mx-auto">
         
-        {/* IDLE STATE */}
+        {/* IDLE */}
         {status === AppStatus.Idle && (
-          <div className="text-center space-y-6 max-w-lg">
-            <div className="bg-blue-100 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
-              <svg className="w-12 h-12 text-blue-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-              </svg>
-            </div>
-            <h2 className="text-4xl font-extrabold text-slate-900 tracking-tight">Shanghai GaoKao Simulator</h2>
-            <p className="text-lg text-slate-600">
-              Generate a unique, AI-powered exam paper consisting of Reading, Repeating, Q&A, and Free Speech sections. Get instant AI grading and feedback.
-            </p>
-            <button 
-              onClick={startGeneration}
-              className="bg-blue-600 hover:bg-blue-700 text-white text-lg font-semibold px-8 py-4 rounded-xl shadow-lg transition-all transform hover:-translate-y-1 w-full sm:w-auto"
-            >
-              Generate New Test
-            </button>
-          </div>
-        )}
-
-        {/* GENERATING STATE */}
-        {status === AppStatus.GeneratingTest && (
-           <div className="flex flex-col items-center space-y-4">
-             <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
-             <p className="text-slate-600 font-medium animate-pulse">Designing your exam paper...</p>
+           <div className="text-center space-y-8 animate-fade-in">
+             <div className="bg-gradient-to-br from-blue-500 to-indigo-600 w-32 h-32 rounded-3xl flex items-center justify-center mx-auto shadow-xl rotate-3">
+               <svg className="w-16 h-16 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
+               </svg>
+             </div>
+             <div>
+                <h2 className="text-4xl font-extrabold text-slate-900 tracking-tight mb-2">Shanghai College Entrance Simulator</h2>
+                <p className="text-lg text-slate-600 max-w-xl mx-auto">
+                  Strict adherence to Part II & III. Includes all section timings and the 10-second interval rule.
+                </p>
+             </div>
+             <button onClick={startGeneration} className="bg-slate-900 text-white text-lg font-semibold px-10 py-4 rounded-xl shadow-2xl hover:bg-slate-800 hover:scale-105 transition-all">
+               Start Examination
+             </button>
            </div>
         )}
 
-        {/* READY STATE */}
-        {status === AppStatus.TestReady && testPaper && (
-          <div className="bg-white p-8 rounded-xl shadow-lg max-w-md w-full text-center space-y-6">
-            <div className="space-y-2">
-               <h3 className="text-2xl font-bold text-slate-800">Test Generated</h3>
-               <p className="text-slate-500">Paper ID: {testPaper.id.substring(0,8)}</p>
-            </div>
-            <div className="grid grid-cols-2 gap-4 text-sm text-left bg-slate-50 p-4 rounded-lg">
-                <div>Reading: <span className="font-semibold">1 Part</span></div>
-                <div>Repeat: <span className="font-semibold">{testPaper.repeatSection.sentences.length} Sentences</span></div>
-                <div>Q&A: <span className="font-semibold">{testPaper.qaSection.questions.length} Questions</span></div>
-                <div>Speech: <span className="font-semibold">1 Topic</span></div>
-            </div>
-            <button 
-              onClick={startTest}
-              className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg shadow transition"
-            >
-              Start Exam
-            </button>
-          </div>
+        {/* LOADING */}
+        {status === AppStatus.GeneratingTest && (
+           <div className="flex flex-col items-center space-y-4">
+             <div className="animate-spin rounded-full h-12 w-12 border-4 border-slate-200 border-t-blue-600"></div>
+             <p className="text-slate-600 font-medium">Generating Exam Paper (Shanghai Standard)...</p>
+             <p className="text-xs text-slate-400">Creating content and images with Gemini...</p>
+           </div>
         )}
 
-        {/* IN PROGRESS STATE */}
+        {/* READY */}
+        {status === AppStatus.TestReady && (
+           <div className="bg-white p-10 rounded-2xl shadow-xl max-w-lg w-full text-center space-y-8">
+             <div>
+               <h3 className="text-3xl font-bold text-slate-800 mb-2">Paper Ready</h3>
+               <p className="text-slate-500">Includes all standard sections and rest intervals.</p>
+             </div>
+             <div className="space-y-3 text-left bg-slate-50 p-6 rounded-xl border border-slate-100">
+                <div className="flex justify-between"><span>Part II. Speaking</span><span className="font-bold text-slate-700">A, B, C, D</span></div>
+                <div className="flex justify-between"><span>Part III. Listening</span><span className="font-bold text-slate-700">A, B</span></div>
+             </div>
+             <button onClick={startTest} className="w-full bg-blue-600 text-white font-bold py-4 rounded-xl shadow-lg hover:bg-blue-700 transition">Begin Test</button>
+           </div>
+        )}
+
+        {/* IN PROGRESS */}
         {status === AppStatus.InProgress && (
-          <div className="w-full max-w-4xl flex flex-col items-center space-y-8">
-            
-            {/* Status Bar / Instruction */}
-            <div className={`text-center transition-all duration-300 ${phase === 'recording' ? 'scale-110' : ''}`}>
-               <h2 className="text-2xl font-bold text-slate-800 mb-2">{instructionText}</h2>
-               {phase === 'prep' && (
-                 <div className="text-4xl font-mono text-orange-500 font-bold">{timer}s</div>
-               )}
+          <div className="w-full max-w-4xl flex flex-col items-center space-y-10">
+            {/* Instruction / Timer */}
+            <div className="text-center space-y-2">
+               <h2 className={`text-3xl font-bold text-slate-800 transition-colors ${phase === 'recording' ? 'text-red-600' : ''}`}>
+                 {instructionText}
+               </h2>
+               {(phase === 'prep' || phase === 'rest') && <div className="text-6xl font-mono font-bold text-orange-500">{timer}s</div>}
+               {phase === 'playing' && <div className="text-blue-500 animate-pulse font-medium tracking-widest">LISTENING...</div>}
             </div>
 
-            {/* Content Area */}
-            {renderContent()}
+            {/* Content Display */}
+            <div className="w-full bg-white rounded-2xl shadow-md min-h-[200px] flex items-center justify-center border border-slate-100">
+               {displayContent}
+            </div>
 
-            {/* Recorder Area */}
+            {/* Recorder */}
             {phase === 'recording' && (
-              <div className="w-full flex justify-center">
-                 <AudioRecorder 
-                   ref={recorderRef}
-                   maxDuration={getRecordDuration()}
-                   onRecordingComplete={handleRecordingComplete}
-                   autoStart={true}
-                 />
-              </div>
+              <AudioRecorder 
+                ref={recorderRef}
+                maxDuration={getRecordDuration()}
+                onRecordingComplete={handleRecordingComplete}
+                autoStart={true}
+              />
             )}
-
-             {/* Processing Indicator */}
-             {phase === 'processing' && (
-               <div className="flex flex-col items-center text-blue-600">
-                  <div className="flex space-x-1 mb-2">
-                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{animationDelay: '0s'}}></div>
-                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{animationDelay: '0.1s'}}></div>
-                    <div className="w-2 h-2 bg-blue-600 rounded-full animate-bounce" style={{animationDelay: '0.2s'}}></div>
-                  </div>
-                  <span className="text-sm font-medium">AI Evaluator is listening...</span>
-               </div>
-             )}
           </div>
         )}
 
-        {/* REVIEW STATE */}
+        {/* SCORING */}
+        {status === AppStatus.Scoring && (
+          <div className="text-center space-y-6">
+             <h2 className="text-2xl font-bold text-slate-800">Calculating Score</h2>
+             <div className="w-64 h-4 bg-slate-200 rounded-full overflow-hidden mx-auto">
+               <div className="bg-blue-600 h-full transition-all duration-500" style={{width: `${(scoringProgress.current / scoringProgress.total) * 100}%`}}></div>
+             </div>
+             <p className="text-slate-500">Analyzing {scoringProgress.current}/{scoringProgress.total} responses...</p>
+          </div>
+        )}
+
+        {/* RESULT */}
         {status === AppStatus.Review && (
-          <TestResult 
-            scores={scores} 
-            onRestart={() => setStatus(AppStatus.Idle)} 
-          />
+          <TestResult scores={scores} onRestart={() => setStatus(AppStatus.Idle)} />
         )}
 
       </main>

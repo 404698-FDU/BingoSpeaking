@@ -1,42 +1,53 @@
+
 export enum TestSectionType {
-  ReadingAloud = 'ReadingAloud',
-  RepeatSentence = 'RepeatSentence',
-  QuestionAnswer = 'QuestionAnswer',
-  FreeSpeech = 'FreeSpeech',
+  SpeakingA = 'SpeakingA', // Reading Sentences
+  SpeakingB = 'SpeakingB', // Reading Paragraph
+  SpeakingC = 'SpeakingC', // Situational Questions
+  SpeakingD = 'SpeakingD', // Picture Talk
+  ListeningA = 'ListeningA', // Fast Response
+  ListeningB = 'ListeningB', // Listening Passage & Q&A
 }
 
 export interface TestPaper {
   id: string;
-  readingSection: {
-    text: string;
-    prepTime: number;
-    recordTime: number;
+  // Part II Speaking
+  speakingA: {
+    items: string[]; // 2 sentences
   };
-  repeatSection: {
-    sentences: string[];
-    recordTime: number;
+  speakingB: {
+    text: string; // 1 passage
   };
-  qaSection: {
-    dialogue: string; // The context dialogue (user listens to this)
+  speakingC: {
+    items: {
+      situation: string; 
+    }[]; // 2 situations
+  };
+  speakingD: {
+    imageDescription: string; // Text description of the 4-panel comic
+    givenSentence: string;
+    imageUrl?: string; // Generated image data
+  };
+  
+  // Part III Listening & Speaking
+  listeningA: {
+    questions: string[]; // 4 sentences to respond to
+  };
+  listeningB: {
+    passage: string; // Read twice
     questions: {
       question: string;
-      answerHint: string;
-    }[];
-    recordTime: number;
-  };
-  speechSection: {
-    topic: string;
-    prompt: string;
-    prepTime: number;
-    recordTime: number;
+      type: 'fact' | 'opinion';
+      prepTime: number;
+      recordTime: number;
+    }[]; // 2 questions
   };
 }
 
 export interface EvaluationResult {
-  score: number; // 0-10 or 0-100
-  accuracy: number;
-  pronunciation: number;
-  fluency: number;
+  score: number; // Actual exam score (e.g. 0.5, 1.0)
+  accuracy: number; // 0-10 for radar chart
+  pronunciation: number; // 0-10 for radar chart
+  fluency: number; // 0-10 for radar chart
   feedback: string;
   transcription: string;
 }
@@ -46,6 +57,15 @@ export interface SectionScore {
   items: EvaluationResult[];
 }
 
+export interface UserResponse {
+  sectionType: TestSectionType;
+  audioBlob: Blob;
+  referenceText: string; // For AI to judge against
+  context?: string;      // Extra context (e.g., the question asked)
+  itemIndex: number;
+  subIndex?: number;     // For multi-part questions like Speaking C (Q1, Q2)
+}
+
 export enum AppStatus {
   Idle,
   GeneratingTest,
@@ -53,8 +73,4 @@ export enum AppStatus {
   InProgress,
   Scoring,
   Review,
-}
-
-export interface AudioConfig {
-  sampleRate: number;
 }
