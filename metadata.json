@@ -1,0 +1,7 @@
+{
+  "name": "Shanghai English Oral Test Simulator",
+  "description": "A comprehensive simulator for the Shanghai College Entrance Examination English Listening and Speaking Test using Gemini for content generation, TTS, and AI scoring.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
