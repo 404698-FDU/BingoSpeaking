@@ -1,19 +1,20 @@
 
 import React from 'react';
-import { SectionScore, TestSectionType } from '../types';
+import { SectionScore, TestSectionType, TestPaper } from '../types';
 import { ResponsiveContainer, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Tooltip } from 'recharts';
 
 interface TestResultProps {
   scores: SectionScore[];
   onRestart: () => void;
+  testPaper: TestPaper | null;
 }
 
-const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
-  // Simple weighted average for demo purposes
+const TestResult: React.FC<TestResultProps> = ({ scores, onRestart, testPaper }) => {
+  // Sum of all individual item scores (Max 10)
   const totalScore = scores.reduce((acc, section) => {
-    const sectionAvg = section.items.reduce((s, item) => s + item.score, 0) / (section.items.length || 1);
-    return acc + sectionAvg;
-  }, 0) / (scores.length || 1);
+    const sectionTotal = section.items.reduce((s, item) => s + item.score, 0);
+    return acc + sectionTotal;
+  }, 0);
 
   const radarData = [
     { subject: 'Pronunciation', A: calculateMetric(scores, 'pronunciation'), fullMark: 10 },
@@ -45,6 +46,49 @@ const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
     }
   };
 
+  const handleDownloadReport = () => {
+    if (!testPaper) return;
+
+    let report = `# Shanghai Oral English Test Report\n\n`;
+    report += `**Total Score:** ${totalScore.toFixed(2)} / 10\n`;
+    report += `**Date:** ${new Date().toLocaleString()}\n\n`;
+
+    scores.forEach((section) => {
+        report += `## ${getSectionTitle(section.sectionType)}\n\n`;
+        
+        section.items.forEach((item, idx) => {
+            report += `### Item ${idx + 1}\n`;
+            
+            // Add Context from Test Paper if possible
+            if (section.sectionType === TestSectionType.SpeakingA && testPaper.speakingA.items[idx]) {
+                report += `> **Text:** ${testPaper.speakingA.items[idx]}\n\n`;
+            } else if (section.sectionType === TestSectionType.SpeakingB) {
+                report += `> **Passage:** ${testPaper.speakingB.text.substring(0, 50)}...\n\n`;
+            } else if (section.sectionType === TestSectionType.ListeningA && testPaper.listeningA.questions[idx]) {
+                report += `> **Prompt:** ${testPaper.listeningA.questions[idx]}\n\n`;
+            } else if (section.sectionType === TestSectionType.ListeningB && testPaper.listeningB.questions[idx]) {
+                report += `> **Question:** ${testPaper.listeningB.questions[idx].question}\n`;
+                report += `> **Answer Key:** ${testPaper.listeningB.questions[idx].answerKey}\n\n`;
+            }
+
+            report += `**Score:** ${item.score} \n`;
+            report += `**Transcription:** "${item.transcription}"\n`;
+            report += `**Feedback:** ${item.feedback}\n`;
+            report += `---\n\n`;
+        });
+    });
+
+    const blob = new Blob([report], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `test-report-${new Date().toISOString().slice(0, 10)}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="w-full max-w-5xl mx-auto space-y-8 animate-fade-in pb-10">
       <div className="bg-white p-8 rounded-2xl shadow-sm border border-slate-200 text-center">
@@ -52,7 +96,7 @@ const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
         <div className="flex items-center justify-center space-x-4 mt-6">
            <div className="text-center">
              <div className="text-5xl font-extrabold text-blue-600">{totalScore.toFixed(1)}</div>
-             <div className="text-sm text-slate-500 uppercase tracking-wide font-semibold mt-1">Total Score</div>
+             <div className="text-sm text-slate-500 uppercase tracking-wide font-semibold mt-1">Total Score (Max 10)</div>
            </div>
         </div>
       </div>
@@ -86,8 +130,8 @@ const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
                      <div key={i} className="text-sm p-3 rounded-lg border border-slate-100 hover:bg-slate-50 transition">
                        <div className="flex justify-between items-center mb-2">
                           <span className="font-medium text-slate-600">Item {i + 1}</span>
-                          <span className={`font-bold px-2 py-0.5 rounded ${item.score >= 6 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                            {item.score.toFixed(1)}
+                          <span className={`font-bold px-2 py-0.5 rounded ${item.score > 0 ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
+                            {item.score.toFixed(2)}
                           </span>
                        </div>
                        <div className="grid grid-cols-1 gap-1 text-slate-500 text-xs">
@@ -103,7 +147,13 @@ const TestResult: React.FC<TestResultProps> = ({ scores, onRestart }) => {
         </div>
       </div>
 
-      <div className="flex justify-center pt-4">
+      <div className="flex justify-center gap-4 pt-4">
+        <button 
+          onClick={handleDownloadReport}
+          className="px-8 py-4 bg-white text-slate-900 border border-slate-300 font-bold rounded-xl shadow-sm hover:bg-slate-50 transition transform hover:-translate-y-1"
+        >
+          Download Report
+        </button>
         <button 
           onClick={onRestart}
           className="px-8 py-4 bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:bg-slate-800 transition transform hover:-translate-y-1"

@@ -2,7 +2,7 @@
 export enum TestSectionType {
   SpeakingA = 'SpeakingA', // Reading Sentences
   SpeakingB = 'SpeakingB', // Reading Paragraph
-  SpeakingC = 'SpeakingC', // Situational Questions
+  SpeakingC = 'SpeakingC', // Situational Questions (Combined recording)
   SpeakingD = 'SpeakingD', // Picture Talk
   ListeningA = 'ListeningA', // Fast Response
   ListeningB = 'ListeningB', // Listening Passage & Q&A
@@ -36,6 +36,7 @@ export interface TestPaper {
     passage: string; // Read twice
     questions: {
       question: string;
+      answerKey: string; // The correct answer or key points
       type: 'fact' | 'opinion';
       prepTime: number;
       recordTime: number;
@@ -63,7 +64,7 @@ export interface UserResponse {
   referenceText: string; // For AI to judge against
   context?: string;      // Extra context (e.g., the question asked)
   itemIndex: number;
-  subIndex?: number;     // For multi-part questions like Speaking C (Q1, Q2)
+  subIndex?: number;     // For multi-part questions like Listening B
 }
 
 export enum AppStatus {

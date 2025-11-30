@@ -48,7 +48,7 @@ export const generateTestPaper = async (): Promise<TestPaper> => {
       speakingD: {
         type: Type.OBJECT,
         properties: {
-          imageDescription: { type: Type.STRING, description: "Visual description of a 4-panel comic strip story involving students or daily life. Describe panel 1, 2, 3, and 4 separately to guide image generation." },
+          imageDescription: { type: Type.STRING, description: "Visual description of a 4-panel comic strip story involving students or daily life. Explicitly mention that the main character (e.g., Xiao Wang) should be labeled or easily identifiable." },
           givenSentence: { type: Type.STRING, description: "The mandatory starting sentence for the story." }
         },
         required: ["imageDescription", "givenSentence"]
@@ -70,11 +70,12 @@ export const generateTestPaper = async (): Promise<TestPaper> => {
               type: Type.OBJECT,
               properties: {
                 question: { type: Type.STRING },
+                answerKey: { type: Type.STRING, description: "The correct factual answer or key points expected for the opinion question." },
                 type: { type: Type.STRING, enum: ["fact", "opinion"] },
                 prepTime: { type: Type.NUMBER },
                 recordTime: { type: Type.NUMBER }
               },
-              required: ["question", "type", "prepTime", "recordTime"]
+              required: ["question", "answerKey", "type", "prepTime", "recordTime"]
             },
             description: "Exactly 2 questions. Q1 is factual (30s prep/30s answer). Q2 is opinion/comment (60s prep/60s answer)."
           }
@@ -87,7 +88,7 @@ export const generateTestPaper = async (): Promise<TestPaper> => {
 
   const response = await ai.models.generateContent({
     model,
-    contents: "Generate a simulation paper for the Shanghai College Entrance Examination English Listening and Speaking Test. \n\nStructure:\nPart II Speaking:\n- Section A: Reading Sentences (2 items)\n- Section B: Reading Passage (1 item)\n- Section C: Situational Questions (2 situations). Ensure each situation explicitly prompts for 2 questions, one of which implies a 'special' (Wh-) question.\n- Section D: Picture Talk (1 item). Provide a description for a 4-panel comic.\n\nPart III Listening and Speaking:\n- Section A: Fast Response (4 items)\n- Section B: Listening Passage (1 passage, 2 questions)\n\nEnsure difficulty matches the Shanghai GaoKao standards.",
+    contents: "Generate a simulation paper for the Shanghai College Entrance Examination English Listening and Speaking Test. \n\nStructure:\nPart II Speaking:\n- Section A: Reading Sentences (2 items)\n- Section B: Reading Passage (1 item)\n- Section C: Situational Questions (2 situations). Ensure each situation explicitly prompts for 2 questions, one of which implies a 'special' (Wh-) question.\n- Section D: Picture Talk (1 item). Provide a description for a 4-panel comic. \n\nPart III Listening and Speaking:\n- Section A: Fast Response (4 items)\n- Section B: Listening Passage (1 passage, 2 questions)\n\nEnsure difficulty matches the Shanghai GaoKao standards.",
     config: {
       responseMimeType: "application/json",
       responseSchema: schema,
@@ -105,7 +106,7 @@ export const generateImage = async (description: string): Promise<string> => {
       const response = await ai.models.generateContent({
         model,
         contents: {
-            parts: [{ text: `Create a simple black and white line-drawing style 4-panel comic strip based on this description: ${description}. The image should look like a test booklet illustration. The panels should be arranged in a grid.` }]
+            parts: [{ text: `Create a simple black and white line-drawing style 4-panel comic strip based on this description: ${description}. The image should look like a test booklet illustration. The panels should be arranged in a grid. IMPORTANT: Include the character's name (e.g. 'Xiao Wang') written clearly in the drawing near the character.` }]
         },
         config: {
            // Standard config for generation
@@ -189,6 +190,8 @@ export const evaluateAudio = async (
     case TestSectionType.SpeakingB: // Reading Passage (1.0 pts)
       rubric = `
         Max Score: 1.0.
+        **IMPORTANT:** The student has a 30-second time limit. If the recording cuts off before the end of the text, **do NOT deduct points for the missing part**. Evaluate only the portion that was read. 
+        
         - 1.0: Clear, accurate, natural intonation, logical pausing, fluent.
         - 0.75: Mostly clear, minor errors, generally fluent.
         - 0.5: Some unclear pronunciation/intonation, not fluent.
@@ -196,12 +199,18 @@ export const evaluateAudio = async (
         - 0.0: Unintelligible.
       `;
       break;
-    case TestSectionType.SpeakingC: // Situational Questions (0.5 pts per question)
+    case TestSectionType.SpeakingC: // Situational Questions (2 Questions, Max 1.0 pts total)
       rubric = `
-        Max Score: 0.5.
+        Max Score: 1.0 (0.5 per question).
+        The audio contains TWO questions asked by the student based on the situation. Evaluate both.
+        
+        For EACH of the two questions:
         - 0.5: Appropriate question, complete structure, correct grammar.
-        - 0.25: Question is relevant but not fully reasonable or has grammatical errors, but meaning is clear.
-        - 0.0: Irrelevant, repetition, unable to ask, or asking two Yes/No questions (2nd gets 0).
+        - 0.25: Relevant but has minor errors.
+        - 0.0: Irrelevant, repetition, or Asking two Yes/No questions (the second Yes/No question gets 0).
+        
+        Final Score is the sum of both (e.g., 0.5 + 0.5 = 1.0).
+        Check if at least one question is a Special Question (Wh-question).
       `;
       break;
     case TestSectionType.SpeakingD: // Picture Talk (1.5 pts)
@@ -222,8 +231,6 @@ export const evaluateAudio = async (
       `;
       break;
     case TestSectionType.ListeningB: // Listening Passage (Q1: 1.0, Q2: 1.5)
-      // We need to guess if it's Q1 or Q2 based on context or max score logic.
-      // Q1 is usually factual (Max 1.0), Q2 is opinion (Max 1.5).
       rubric = `
         If Factual Question (Q1): Max Score 1.0.
         - 1.0: Clear, comprehensive, correct answer.
@@ -243,7 +250,7 @@ export const evaluateAudio = async (
     Task: Evaluate the student's oral English performance for the Shanghai GaoKao.
     Section Type: ${type}
     Context/Prompt: "${context || 'N/A'}"
-    Reference/Expected Content: "${referenceText}"
+    Reference Answer / Content: "${referenceText}"
 
     Rubric:
     ${rubric}
@@ -255,6 +262,7 @@ export const evaluateAudio = async (
        - Pronunciation: Intonation, stress, clarity.
        - Fluency: Flow and speed.
     3. Transcribe the audio.
+    4. Provide the 'feedback' text in **Simplified Chinese (简体中文)**.
     
     Provide JSON output.
   `;
@@ -266,7 +274,7 @@ export const evaluateAudio = async (
       accuracy: { type: Type.NUMBER, description: "0-10 scale" },
       pronunciation: { type: Type.NUMBER, description: "0-10 scale" },
       fluency: { type: Type.NUMBER, description: "0-10 scale" },
-      feedback: { type: Type.STRING },
+      feedback: { type: Type.STRING, description: "Feedback in Simplified Chinese" },
       transcription: { type: Type.STRING },
     }
   };
